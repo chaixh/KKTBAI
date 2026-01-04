@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Good Autobid - 技术要求填写</title>
+    <style>
+        /* 简单样式，确保页面可用 */
+        body { padding: 20px; font-family: Arial, sans-serif; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #333; }
+        textarea { width: 100%; height: 300px; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 20px; background: #007bff; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .nav { margin: 20px 0; }
+        .nav a { margin-right: 20px; text-decoration: none; color: #007bff; font-size: 16px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="nav">
+            <a href="/">技术要求</a>
+            <a href="/outline">大纲生成</a>
+            <a href="/document">终稿生成</a>
+        </div>
+        <h1>技术要求 & 评分标准填写</h1>
+        <h3>技术要求（tech.md）</h3>
+        <textarea id="techContent" placeholder="请输入招标项目的技术要求，例如：1. 系统支持1000并发用户；2. 采用MySQL 8.0数据库..."></textarea>
+        <h3>评分标准（score.md）</h3>
+        <textarea id="scoreContent" placeholder="请输入招标评分标准，例如：技术方案40分；售后服务30分；性价比30分..."></textarea>
+        <button onclick="saveInput()">保存并下一步</button>
+    </div>
+
+
+    <script>
+        // 真实保存技术要求和评分标准到后端（写入inputs目录文件）
+        async function saveInput() {
+            const tech = document.getElementById('techContent').value;
+            const score = document.getElementById('scoreContent').value;
+            if (!tech || !score) {
+                alert('请填写完整技术要求和评分标准！');
+                return;
+            }
+
+            try {
+                // 发起POST请求，对接后端保存接口
+                const response = await fetch('/save_input', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ tech_content: tech, score_content: score })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    alert('保存成功，请切换到「大纲生成」页面！');
+                } else {
+                    alert('保存失败：' + result.msg);
+                }
+            } catch (error) {
+                console.error('保存失败：', error);
+                alert('保存失败，请检查服务是否正常！');
+            }
+        }
+    </script>
+
+</body>
+</html>

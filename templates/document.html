@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Good Autobid - 终稿生成</title>
+    <style>
+        body { padding: 20px; font-family: Arial, sans-serif; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .nav { margin: 20px 0; }
+        .nav a { margin-right: 20px; text-decoration: none; color: #007bff; font-size: 16px; }
+        button { padding: 10px 20px; background: #007bff; color: #fff; border: none; border-radius: 4px; cursor: pointer; margin: 10px 0; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        #documentResult {
+            width: 100%;
+            height: 600px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            margin: 10px 0;
+            white-space: pre-wrap; /* 保留换行和空格 */
+            word-break: break-all; /* 自动换行 */
+            overflow-y: auto; /* 内容超出显示滚动条 */
+        }
+        .tip { color: #666; margin: 10px 0; font-size: 14px; }
+    </style>
+    <!-- 可选：引入marked.js格式化Markdown内容 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="nav">
+            <a href="/">技术要求</a>
+            <a href="/outline">大纲生成</a>
+            <a href="/document">终稿生成</a>
+        </div>
+        <h1>投标文件终稿生成</h1>
+        <button id="generateDocBtn" onclick="generateDocument()">生成终稿</button>
+        <p class="tip">提示：终稿生成耗时较长（根据内容多少而定），请勿刷新页面！</p>
+        <h3>终稿内容（生成后将显示在此处，可直接复制保存）</h3>
+        <div id="documentResult" contenteditable="true" placeholder="点击「生成终稿」按钮，等待生成结果..."></div>
+        <button onclick="saveDocument()">导出Word文档</button>
+        <p id="savePathTip" class="tip" style="color: #28a745; display: none;"></p> <!-- 显示保存路径 -->
+    </div>
+
+    <script>
+        const generateDocBtn = document.getElementById('generateDocBtn');
+        const documentResult = document.getElementById('documentResult');
+        const savePathTip = document.getElementById('savePathTip');
+
+        async function generateDocument() {
+            // 初始化状态
+            documentResult.innerText = "正在生成终稿，请稍候...（LLM生成大量内容需要时间，请勿刷新页面）";
+            savePathTip.style.display = "none";
+            generateDocBtn.disabled = true;
+            generateDocBtn.innerText = "生成中...";
+
+            try {
+                const response = await fetch('/generate_document', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+
+                const rawResponse = await response.text();
+                console.log('终稿接口原始返回：', rawResponse);
+                let result;
+
+                // 解析JSON
+                try {
+                    result = JSON.parse(rawResponse);
+                } catch (jsonError) {
+                    throw new Error(`后端返回非JSON格式：${rawResponse}`);
+                }
+
+                // 兼容后端返回格式
+                let isSuccess = false;
+                let errorMsg = "后端未返回错误信息";
+                let documentContent = "";
+                let savePath = "";
+
+                // 优先适配标准格式
+                if (result.hasOwnProperty('success')) {
+                    isSuccess = result.success;
+                    errorMsg = result.msg || errorMsg;
+                    documentContent = result.data?.document_content || "";
+                    savePath = result.data?.md_save_path || "";
+                }
+                // 兼容旧格式
+                else if (result.hasOwnProperty('status')) {
+                    isSuccess = result.status === "success";
+                    errorMsg = result.message || errorMsg;
+                    documentContent = result.data?.document_content || "";
+                }
+
+                // 渲染内容
+                if (isSuccess) {
+                    if (documentContent) {
+                        // 格式化Markdown内容（若无需格式化，替换为 documentResult.innerText = documentContent;）
+                        documentResult.innerHTML = marked.parse(documentContent);
+                        // 显示保存路径
+                        if (savePath) {
+                            savePathTip.innerText = `终稿已保存到本地：${savePath}`;
+                            savePathTip.style.display = "block";
+                        }
+                        alert('终稿生成成功！可直接复制内容或打开本地保存文件查看');
+                    } else {
+                        documentResult.innerText = "终稿生成成功，但无返回内容（请检查大纲是否有效）";
+                    }
+                } else {
+                    documentResult.innerText = "终稿生成失败：" + errorMsg;
+                    alert('终稿生成失败：' + errorMsg);
+                }
+            } catch (error) {
+                console.error('终稿生成失败：', error);
+                const errorMsg = error.message || "网络异常或服务未响应";
+                documentResult.innerText = "终稿生成失败：" + errorMsg;
+                alert('终稿生成失败：' + errorMsg);
+            } finally {
+                // 恢复按钮状态
+                generateDocBtn.disabled = false;
+                generateDocBtn.innerText = "生成终稿";
+            }
+        }
+
+        function saveDocument() {
+            // 原有提示，后续可扩展真实Word导出逻辑
+            alert('Word文档导出功能需结合后端docx生成逻辑，当前已生成真实内容，可手动复制保存或查看本地md文件！');
+        }
+    </script>
+</body>
+</html>
