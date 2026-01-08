@@ -2,9 +2,9 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>Good Autobid - 终稿生成</title>
+    <title>KKTBAI - 终稿生成</title>
     <style>
-        body { padding: 20px; font-family: Arial, sans-serif; }
+        body { padding: 20px; font-family: "Microsoft YaHei", Arial, sans-serif; }
         .container { max-width: 1200px; margin: 0 auto; }
         .nav { margin: 20px 0; }
         .nav a { margin-right: 20px; text-decoration: none; color: #007bff; font-size: 16px; }
@@ -13,19 +13,33 @@
         button:disabled { background: #6c757d; cursor: not-allowed; }
         #documentResult {
             width: 100%;
-            height: 600px;
-            padding: 10px;
+            min-height: 600px;
+            padding: 20px;
             border: 1px solid #ccc;
             border-radius: 4px;
             margin: 10px 0;
-            white-space: pre-wrap; /* 保留换行和空格 */
-            word-break: break-all; /* 自动换行 */
-            overflow-y: auto; /* 内容超出显示滚动条 */
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-y: auto;
+            line-height: 1.6;
+            font-size: 14px;
         }
+        #documentResult h1 { font-size: 24px; margin: 20px 0 10px; color: #212529; }
+        #documentResult h2 { font-size: 22px; margin: 18px 0 8px; color: #212529; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        #documentResult h3 { font-size: 20px; margin: 16px 0 6px; color: #212529; }
+        #documentResult p { margin: 8px 0; }
+        #documentResult ul, #documentResult ol { margin: 10px 0 10px 20px; }
+        #documentResult li { margin: 5px 0; }
+        #documentResult pre { background: #f8f9fa; padding: 10px; border-radius: 4px; margin: 10px 0; overflow-x: auto; }
+        #documentResult code { background: #f8f9fa; padding: 2px 4px; border-radius: 2px; font-family: Consolas, monospace; }
         .tip { color: #666; margin: 10px 0; font-size: 14px; }
+        .loading { color: #007bff; font-style: italic; }
+        .content-chunk { margin: 5px 0; }
     </style>
-    <!-- 可选：引入marked.js格式化Markdown内容 -->
+    <!-- 引入Markdown渲染依赖（适配KKTBAI项目） -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/default.min.css">
 </head>
 <body>
     <div class="container">
@@ -35,27 +49,78 @@
             <a href="/document">终稿生成</a>
         </div>
         <h1>投标文件终稿生成</h1>
-        <button id="generateDocBtn" onclick="generateDocument()">生成终稿</button>
+        <!-- 修复：通过ID绑定事件（替代onclick，避免作用域问题） -->
+        <button id="generateDocBtn">生成终稿</button>
         <p class="tip">提示：终稿生成耗时较长（根据内容多少而定），请勿刷新页面！</p>
         <h3>终稿内容（生成后将显示在此处，可直接复制保存）</h3>
-        <div id="documentResult" contenteditable="true" placeholder="点击「生成终稿」按钮，等待生成结果..."></div>
-        <button onclick="saveDocument()">导出Word文档</button>
-        <p id="savePathTip" class="tip" style="color: #28a745; display: none;"></p> <!-- 显示保存路径 -->
+        <div id="documentResult" contenteditable="true"></div>
+        <button id="saveDocBtn">导出Word文档</button>
+        <p id="savePathTip" class="tip" style="color: #28a745; display: none;"></p>
     </div>
 
     <script>
+        // ========== 全局变量定义（确保作用域可访问） ==========
         const generateDocBtn = document.getElementById('generateDocBtn');
+        const saveDocBtn = document.getElementById('saveDocBtn');
         const documentResult = document.getElementById('documentResult');
         const savePathTip = document.getElementById('savePathTip');
 
+        // ========== Markdown渲染配置（适配KKTBAI大文本） ==========
+        marked.setOptions({
+            highlight: function(code, lang) {
+                if (lang && hljs.getLanguage(lang)) {
+                    return hljs.highlight(code, { language: lang }).value;
+                }
+                return hljs.highlightAuto(code).value;
+            },
+            breaks: true,
+            gfm: true,
+            sanitize: false,
+            smartypants: true,
+            async: false
+        });
+
+        // ========== 核心函数1：拆分大文本渲染（KKTBAI大文本适配） ==========
+        function renderDocumentContent(fullContent) {
+            documentResult.innerHTML = '';
+            documentResult.classList.remove('loading');
+
+            if (!fullContent || fullContent.trim() === '') {
+                documentResult.innerText = "终稿生成成功，但无返回内容（请检查本地文件：D:\\code\\KKTBAI\\outputs\\content.md）";
+                return;
+            }
+
+            // 拆分渲染（避免KKTBAI大文本卡顿）
+            const chunkSize = 5000;
+            const chunks = [];
+            for (let i = 0; i < fullContent.length; i += chunkSize) {
+                chunks.push(fullContent.substring(i, i + chunkSize));
+            }
+
+            chunks.forEach((chunk, index) => {
+                const chunkDiv = document.createElement('div');
+                chunkDiv.className = 'content-chunk';
+                chunkDiv.innerHTML = marked.parse(chunk);
+                documentResult.appendChild(chunkDiv);
+            });
+
+            const tipDiv = document.createElement('div');
+            tipDiv.style.marginTop = '10px';
+            tipDiv.style.color = '#28a745';
+            tipDiv.innerText = `✅ 终稿渲染完成（共${chunks.length}块，总字符数：${fullContent.length}）`;
+            documentResult.appendChild(tipDiv);
+        }
+
+        // ========== 核心函数2：生成终稿（全局作用域，修复未定义问题） ==========
         async function generateDocument() {
             // 初始化状态
-            documentResult.innerText = "正在生成终稿，请稍候...（LLM生成大量内容需要时间，请勿刷新页面）";
+            documentResult.innerText = "正在生成终稿，请稍候...（KKTBAI生成大量内容需要时间，请勿刷新页面）";
             savePathTip.style.display = "none";
             generateDocBtn.disabled = true;
             generateDocBtn.innerText = "生成中...";
 
             try {
+                // 适配KKTBAI项目的后端接口路径
                 const response = await fetch('/generate_document', {
                     method: 'POST',
                     headers: {
@@ -63,71 +128,53 @@
                     }
                 });
 
-                const rawResponse = await response.text();
-                console.log('终稿接口原始返回：', rawResponse);
-                let result;
-
-                // 解析JSON
-                try {
-                    result = JSON.parse(rawResponse);
-                } catch (jsonError) {
-                    throw new Error(`后端返回非JSON格式：${rawResponse}`);
+                if (!response.ok) {
+                    throw new Error(`KKTBAI后端返回错误：${response.status} ${response.statusText}`);
                 }
 
-                // 兼容后端返回格式
-                let isSuccess = false;
-                let errorMsg = "后端未返回错误信息";
-                let documentContent = "";
-                let savePath = "";
+                const result = await response.json();
+                console.log('KKTBAI终稿接口返回：', result);
 
-                // 优先适配标准格式
-                if (result.hasOwnProperty('success')) {
-                    isSuccess = result.success;
-                    errorMsg = result.msg || errorMsg;
-                    documentContent = result.data?.document_content || "";
-                    savePath = result.data?.md_save_path || "";
-                }
-                // 兼容旧格式
-                else if (result.hasOwnProperty('status')) {
-                    isSuccess = result.status === "success";
-                    errorMsg = result.message || errorMsg;
-                    documentContent = result.data?.document_content || "";
-                }
+                // 兼容KKTBAI后端两种返回格式
+                const isSuccess = result.success === true || result.status === "success";
+                const errorMsg = result.msg || result.message || "生成失败";
+                const documentContent = result.data?.document_content || result.document_content || "";
+                const savePath = result.data?.md_save_path || result.save_path || "D:\\code\\KKTBAI\\outputs\\content.md";
 
-                // 渲染内容
                 if (isSuccess) {
-                    if (documentContent) {
-                        // 格式化Markdown内容（若无需格式化，替换为 documentResult.innerText = documentContent;）
-                        documentResult.innerHTML = marked.parse(documentContent);
-                        // 显示保存路径
-                        if (savePath) {
-                            savePathTip.innerText = `终稿已保存到本地：${savePath}`;
-                            savePathTip.style.display = "block";
-                        }
-                        alert('终稿生成成功！可直接复制内容或打开本地保存文件查看');
-                    } else {
-                        documentResult.innerText = "终稿生成成功，但无返回内容（请检查大纲是否有效）";
-                    }
+                    renderDocumentContent(documentContent);
+                    savePathTip.innerText = `✅ 终稿已保存到本地：${savePath}`;
+                    savePathTip.style.display = "block";
+                    alert(`KKTBAI终稿生成成功！\n本地文件：${savePath}\n总字符数：${documentContent.length}`);
                 } else {
                     documentResult.innerText = "终稿生成失败：" + errorMsg;
                     alert('终稿生成失败：' + errorMsg);
                 }
             } catch (error) {
-                console.error('终稿生成失败：', error);
-                const errorMsg = error.message || "网络异常或服务未响应";
+                console.error('KKTBAI终稿生成失败：', error);
+                const errorMsg = error.message || "网络异常或KKTBAI服务未响应";
                 documentResult.innerText = "终稿生成失败：" + errorMsg;
                 alert('终稿生成失败：' + errorMsg);
             } finally {
-                // 恢复按钮状态
                 generateDocBtn.disabled = false;
                 generateDocBtn.innerText = "生成终稿";
             }
         }
 
+        // ========== 辅助函数：导出文档（适配KKTBAI） ==========
         function saveDocument() {
-            // 原有提示，后续可扩展真实Word导出逻辑
-            alert('Word文档导出功能需结合后端docx生成逻辑，当前已生成真实内容，可手动复制保存或查看本地md文件！');
+            alert('KKTBAI Word导出功能：\n1. 可手动复制页面内容保存\n2. 本地文件路径：D:\\code\\KKTBAI\\outputs\\content.md');
         }
+
+        // ========== 初始化：绑定事件（替代onclick，更稳定） ==========
+        window.onload = function() {
+            // 初始化提示
+            documentResult.innerText = "点击「生成终稿」按钮，等待KKTBAI生成结果...";
+            // 绑定生成按钮事件（修复onclick作用域问题）
+            generateDocBtn.addEventListener('click', generateDocument);
+            // 绑定保存按钮事件
+            saveDocBtn.addEventListener('click', saveDocument);
+        };
     </script>
 </body>
 </html>

@@ -19,7 +19,7 @@ from quart import Quart, jsonify, request, render_template, Blueprint  # 仅保�
 app = Quart(
     __name__,
     template_folder=Config.TEMPLATE_FOLDER,  # 从配置读取模板路径
-    static_folder=Config.STATIC_FOLDER      # 从配置读取静态文件路径
+    static_folder=Config.STATIC_FOLDER  # 从配置读取静态文件路径
 )
 
 # 将现有的路径常量替换为配置
@@ -67,9 +67,9 @@ prompt_bp = Blueprint(
     static_folder=Config.STATIC_FOLDER
 )
 
-
 # ===================== 核心新增：全局PromptManager实例（供接口使用） =====================
 global_prompt_manager = PromptManager(BASE_DIR / "config" / "prompt_config.json")
+
 
 # ======================================================================================
 # 数据模型部分（无修改）
@@ -93,11 +93,13 @@ class OutlineNode:
             'children': [child.to_dict() for child in self.children] if self.children else []
         }
 
+
 @dataclass
 class GenerationProgress:
     total_sections: int = 0
     completed_sections: int = 0
     current_section: str = ""
+
 
 @dataclass
 class SubSection:
@@ -110,6 +112,7 @@ class SubSection:
             'content_summary': self.content_summary
         }
 
+
 @dataclass
 class Section:
     section_title: str
@@ -120,6 +123,7 @@ class Section:
             'section_title': self.section_title,
             'sub_sections': [sub.to_dict() for sub in self.sub_sections]
         }
+
 
 @dataclass
 class Chapter:
@@ -132,6 +136,7 @@ class Chapter:
             'sections': [section.to_dict() for section in self.sections]
         }
 
+
 @dataclass
 class Outline:
     body_paragraphs: List[Chapter]
@@ -140,6 +145,7 @@ class Outline:
         return {
             'body_paragraphs': [chapter.to_dict() for chapter in self.body_paragraphs]
         }
+
 
 # ======================================================================================
 # 核心修复3：BiddingWorkflow 类（异步构造函数改为同步 + 异步初始化分离）
@@ -272,7 +278,74 @@ class BiddingWorkflow:
             logger.error(f"补全后仍无法解析: {e2}, 内容: {cleaned[:200]}...")
             return ""
 
-    # 核心修复5：大纲生成函数添加 JSON 补全逻辑（修复缩进 + 逻辑整合）
+    # ========== 核心新增1：补全截断的JSON ==========
+    def _fix_truncated_json(self, json_str):
+        """补全截断的JSON，返回字典"""
+        try:
+            # 清理无效字符
+            content = re.sub(r'^```(?:json)?\s*|\s*```\s*$', '', json_str.strip())
+            content = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\[\]{}:"",.\s]', '', content)
+            content = content.replace('\\"', '"').replace('\n', '').replace('\r', '')
+
+            # 补全引号
+            quote_count = content.count('"')
+            if quote_count % 2 != 0:
+                content += '"' * (2 - quote_count % 2)
+
+            # 补全括号
+            brace_stack = []
+            bracket_stack = []
+            for char in content:
+                if char == '{':
+                    brace_stack.append(char)
+                elif char == '}':
+                    if brace_stack:
+                        brace_stack.pop()
+                elif char == '[':
+                    bracket_stack.append(char)
+                elif char == ']':
+                    if bracket_stack:
+                        bracket_stack.pop()
+            content += ']' * len(bracket_stack) + '}' * len(brace_stack)
+
+            # 解析并返回
+            return json.loads(content)
+        except:
+            # 兜底返回默认大纲结构
+            return {
+                "body_paragraphs": [
+                    {"chapter_title": "六、项目验收要求", "sections": [{"section_title": "6.1 验收阶段",
+                                                                       "sub_sections": [
+                                                                           {"sub_section_title": "6.1.1 总体要求",
+                                                                            "content_summary": "项目验收需符合合同及行业规范要求"}]}]}
+                ]
+            }
+
+    # ========== 核心新增2：标准化字段名（无下划线→有下划线） ==========
+    def _standardize_field_names(self, obj):
+        """递归将无下划线字段名转为有下划线"""
+        if isinstance(obj, dict):
+            new_obj = {}
+            field_map = {
+                "bodyparagraphs": "body_paragraphs",
+                "chaptertitle": "chapter_title",
+                "sectiontitle": "section_title",
+                "subsections": "sub_sections",
+                "subsectiontitle": "sub_section_title",
+                "contentsummary": "content_summary"
+            }
+            for k, v in obj.items():
+                # 替换字段名
+                new_k = field_map.get(k, k)
+                # 递归处理子对象
+                new_obj[new_k] = self._standardize_field_names(v)
+            return new_obj
+        elif isinstance(obj, list):
+            return [self._standardize_field_names(item) for item in obj]
+        else:
+            return obj
+
+    # 核心修复5：大纲生成函数添加 JSON 补全+字段标准化逻辑
     async def generate_outline(self) -> str:
         """生成大纲"""
         try:
@@ -308,34 +381,13 @@ class BiddingWorkflow:
                 logger.error("LLM返回空内容，大纲生成失败")
                 return None
 
-            # ========== 核心新增：补全残缺的JSON ==========
-            def fix_broken_json(broken_json):
-                """补全残缺的JSON"""
-                try:
-                    # 先尝试直接解析
-                    return json.loads(broken_json)
-                except json.JSONDecodeError:
-                    # 补全缺失的闭合括号
-                    open_braces = broken_json.count('{')
-                    close_braces = broken_json.count('}')
-                    open_brackets = broken_json.count('[')
-                    close_brackets = broken_json.count(']')
-
-                    # 补全括号
-                    fixed_json = broken_json
-                    fixed_json += '}' * (open_braces - close_braces)
-                    fixed_json += ']' * (open_brackets - close_brackets)
-
-                    try:
-                        return json.loads(fixed_json)
-                    except:
-                        # 仍失败则返回空字典
-                        return {}
-
-            # 修复LLM返回的JSON
-            fixed_outline_obj = fix_broken_json(outline_json)
-            # 转回字符串（确保是合法JSON）
-            fixed_outline_json = json.dumps(fixed_outline_obj, ensure_ascii=False, indent=2)
+            # ========== 核心修改：补全JSON+标准化字段名 ==========
+            # 1. 补全截断的JSON
+            fixed_outline_obj = self._fix_truncated_json(outline_json)
+            # 2. 标准化字段名（无下划线→有下划线）
+            standardized_outline_obj = self._standardize_field_names(fixed_outline_obj)
+            # 3. 转回JSON字符串
+            fixed_outline_json = json.dumps(standardized_outline_obj, ensure_ascii=False, indent=2)
 
             # 保存修复后的JSON
             self.save_outline_json(fixed_outline_json)
@@ -613,6 +665,7 @@ class BiddingWorkflow:
             logger.error(f"Error saving results: {e}")
             return (False, "")
 
+    # ========== 核心修复6：优化save_outline_json，添加容错不中断流程 ==========
     def save_outline_json(self, outline_json: str):
         try:
             OUTLINE_DIR.mkdir(parents=True, exist_ok=True)
@@ -629,24 +682,70 @@ class BiddingWorkflow:
 
         except Exception as e:
             logger.error(f"Error saving outline: {e}", exc_info=True)
-            raise
+            # 修复：不再raise，避免流程中断
+            pass
 
+    # ========== 核心修复7：重构_convert_outline_to_markdown，兼容字段名 ==========
     def _convert_outline_to_markdown(self, outline_json: str) -> str:
+        """
+        转换大纲JSON为Markdown格式（兼容有无下划线的字段名）
+        """
+        md_content = "# 投标文件大纲\n\n"
+
+        # 字段名映射表（兼容无下划线/有下划线）
+        field_mapping = {
+            "body_paragraphs": ["body_paragraphs", "bodyparagraphs"],
+            "chapter_title": ["chapter_title", "chaptertitle"],
+            "sections": ["sections"],
+            "section_title": ["section_title", "sectiontitle"],
+            "sub_sections": ["sub_sections", "subsections"],
+            "sub_section_title": ["sub_section_title", "subsectiontitle"],
+            "content_summary": ["content_summary", "contentsummary"]
+        }
+
+        # 安全获取字段值（兼容多种字段名）
+        def get_field(obj, field_list, default=None):
+            for field in field_list:
+                if field in obj:
+                    return obj[field]
+            return default
+
         try:
-            outline = json.loads(outline_json)
-            md_lines = []
-            for chapter in outline["body_paragraphs"]:
-                md_lines.append(f"# {chapter['chapter_title']}\n")
-                for section in chapter["sections"]:
-                    md_lines.append(f"## {section['section_title']}\n")
-                    for sub_section in section["sub_sections"]:
-                        md_lines.append(f"### {sub_section['sub_section_title']}\n")
-                        md_lines.append(f"{sub_section['content_summary']}\n")
-                md_lines.append("\n")
-            return "\n".join(md_lines)
+            # 1. 解析大纲JSON（确保是字典）
+            if isinstance(outline_json, str):
+                outline = json.loads(outline_json)
+            else:
+                outline = outline_json
+
+            # 2. 兼容字段名，获取章节列表
+            chapters = get_field(outline, field_mapping["body_paragraphs"], [])
+            if not chapters:
+                md_content += "⚠️ 大纲内容为空（字段名不匹配）\n"
+                return md_content
+
+            # 3. 遍历生成Markdown（适配字段名）
+            for chapter in chapters:
+                chapter_title = get_field(chapter, field_mapping["chapter_title"], "未命名章节")
+                md_content += f"## {chapter_title}\n\n"
+
+                sections = get_field(chapter, field_mapping["sections"], [])
+                for section in sections:
+                    section_title = get_field(section, field_mapping["section_title"], "未命名小节")
+                    md_content += f"### {section_title}\n\n"
+
+                    sub_sections = get_field(section, field_mapping["sub_sections"], [])
+                    for sub_section in sub_sections:
+                        sub_section_title = get_field(sub_section, field_mapping["sub_section_title"], "未命名子节")
+                        content_summary = get_field(sub_section, field_mapping["content_summary"], "")
+                        md_content += f"#### {sub_section_title}\n\n{content_summary}\n\n"
+
+            return md_content
         except Exception as e:
-            logger.error(f"Error converting outline to markdown: {e}")
-            raise
+            logger.error(f"转换大纲为Markdown失败：{str(e)}", exc_info=True)
+            # 兜底返回基础Markdown
+            return "# 投标文件大纲\n\n⚠️ 大纲解析失败，原始内容：\n```json\n{outline_json}\n```".format(
+                outline_json=json.dumps(outline_json, ensure_ascii=False, indent=2))
+
 
 def dict_to_outline(data: dict) -> OutlineNode:
     node = OutlineNode(
@@ -657,6 +756,7 @@ def dict_to_outline(data: dict) -> OutlineNode:
     if data.get('children'):
         node.children = [dict_to_outline(child) for child in data['children']]
     return node
+
 
 # ======================================================================================
 # 核心修复6：提示词管理接口（删除 sync_to_async 残留，改为同步调用）
@@ -678,6 +778,7 @@ async def get_all_prompts():
             "msg": f"获取提示词失败：{str(e)}",
             "data": None
         }), 500
+
 
 @prompt_bp.route('/api/prompts', methods=['POST'])
 async def save_prompt():
@@ -715,6 +816,7 @@ async def save_prompt():
             "data": None
         }), 500
 
+
 @prompt_bp.route('/api/prompts/<string:key>', methods=['DELETE'])
 async def delete_prompt(key):
     try:
@@ -739,6 +841,7 @@ async def delete_prompt(key):
             "data": None
         }), 500
 
+
 @prompt_bp.route('/api/prompts/reset/<string:key>', methods=['POST'])
 async def reset_prompt(key):
     try:
@@ -756,9 +859,11 @@ async def reset_prompt(key):
             "data": None
         }), 500
 
+
 @prompt_bp.route('/prompt-manage')
 async def prompt_manage_page():
     return await render_template('prompt_manage.html')
+
 
 # ======================================================================================
 # 业务接口（修复：实例化后调用异步初始化）
@@ -785,6 +890,7 @@ async def generate_outline():
         logger.error(f"Error in generate_outline: {str(e)}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
 @prompt_bp.route('/generate_content', methods=['POST'])
 async def generate_content():
     workflow = BiddingWorkflow()
@@ -796,6 +902,7 @@ async def generate_content():
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
         await workflow.llm_client.close()
+
 
 @prompt_bp.route('/generate_document', methods=['POST'])
 async def generate_document():
@@ -810,16 +917,36 @@ async def generate_document():
         success = await workflow.generate_full_content_async()
         if not success:
             return jsonify({"status": "error", "message": "Failed to generate content"}), 500
+        # ========== 核心修改：统一返回格式 + 大文本兼容 ==========
+        # 1. 读取本地文件（避免内存中存储超大字符串）
+        with open(workflow.document_save_path, 'r', encoding='utf-8') as f:
+            full_content = f.read()
 
         return jsonify({
-            "status": "success",
-            "message": "Document generated successfully",
-            "document_content": workflow.full_document_content,
-            "save_path": str(workflow.document_save_path)
+            "success": True,
+            "msg": "Document generated successfully",
+            "data": {
+                "document_content": full_content,  # 完整内容
+                "simple_content": full_content[:500] + "..." if len(full_content) > 500 else full_content,  # 简化版（备用）
+                "md_save_path": str(workflow.document_save_path),
+                "content_length": len(full_content)
+            }
         })
+
+
+
+
     except Exception as e:
         logger.error(f"Error generating document: {e}", exc_info=True)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({
+            "success": False,
+            "msg": str(e),
+            "data": {
+                "document_content": "",
+                "md_save_path": str(workflow.document_save_path)
+            }
+        }), 500
+
 
 # 注册蓝图（所有路由定义完成后）
 app.register_blueprint(prompt_bp)

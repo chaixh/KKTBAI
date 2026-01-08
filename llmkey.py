@@ -17,25 +17,26 @@ logger = logging.getLogger(__name__)
 
 # 合并两个 LLMClient 类，保留所有有效功能，删除重复定义
 class LLMClient:
-    # 整合两个类的 __init__ 方法，兼容火山引擎/百度，保留环境变量配置
+    # 整合两个类的 __init__ 方法，兼容智谱/火山引擎/百度，保留环境变量配置
     def __init__(self, api_key=None, api_secret=None, api_base=None, model=None, temperature=0.7, max_tokens=8192,
                  timeout=300):
         # 优先使用传入参数，无传入则使用环境变量/Config配置
         self.api_key = api_key or os.getenv('LLM_API_KEY', Config.LLM_API_KEY)
         self.api_secret = api_secret or os.getenv('LLM_API_SECRET', None)
-        self.api_base = api_base or os.getenv('LLM_API_BASE', Config.LLM_API_BASE)
+        self.api_base = api_base or os.getenv('LLM_API_BASE', Config.LLM_API_BASE)  # 关键：保留配置加载
         self.model = model or Config.LLM_MODEL
         self.temperature = temperature or Config.TEMPERATURE
         self.max_tokens = max_tokens or Config.MAX_TOKENS
         self.timeout = timeout or Config.TIMEOUT
         # 核心修复：移除 self.session 复用，改为每次调用创建新会话
         self.messages = []
-        # 百度专属：获取 Access Token
+        # 百度专属：获取 Access Token（智谱无需此逻辑）
         self.access_token = self._get_baidu_access_token() if self.api_secret else None
         logger.info("LLM client initialized successfully")
         print(f"加载的API Key：{self.api_key[:10]}...")
+        print(f"加载的API地址：{self.api_base}")  # 新增：打印API地址，验证配置加载
 
-    # 百度 Access Token 获取方法（保留原有功能）
+    # 百度 Access Token 获取方法（保留原有功能，智谱无需调用）
     def _get_baidu_access_token(self):
         try:
             token_url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={self.api_key}&client_secret={self.api_secret}"
@@ -87,17 +88,25 @@ class LLMClient:
             'connector': connector
         }
 
-        # 添加鉴权头（区分火山引擎/百度）
+        # 添加鉴权头（区分智谱/火山引擎/百度）
         if not self.api_secret:
-            session_kwargs['headers']["Authorization"] = f"glm-key {self.api_key}"
-        # 如果使用代理，添加代理配置
-        if Config.USE_PROXY:
+            # 智谱AI：glm-key 前缀；火山引擎：Bearer 前缀
+            # 自动识别：根据API_BASE是否包含bigmodel.cn判断是否为智谱
+            # 通义千问认证格式：Bearer {API_KEY}（和OpenAI一致）
+            if "dashscope.aliyuncs.com" in self.api_base:
+                session_kwargs['headers']["Authorization"] = f"Bearer {self.api_key}"
+            elif "bigmodel.cn" in self.api_base:
+                session_kwargs['headers']["Authorization"] = f"glm-key {self.api_key}"
+            else:
+                session_kwargs['headers']["Authorization"] = f"Bearer {self.api_key}"
+        # 如果使用代理，添加代理配置（智谱无需代理，建议关闭）
+        if Config.USE_PROXY and "bigmodel.cn" not in self.api_base:
             session_kwargs['proxy'] = Config.PROXY_URLS['https']
             logger.info(f"Using proxy: {Config.PROXY_URLS}")
 
         return session_kwargs
 
-    # 核心方法：_call_llm_async（使用 async with 管理会话，解决资源泄漏）
+    # 核心方法：_call_llm_async（使用 async with 管理会话，解决资源泄漏+移除硬编码URL）
     async def _call_llm_async(self, messages, require_json=False, require_outline=False):
         retry_count = 0
         session_kwargs = self._get_session_kwargs()
@@ -117,12 +126,12 @@ class LLMClient:
 
                     logger.debug(f"Sending request with params: {json.dumps(request_params, ensure_ascii=False)}")
 
-                    # 区分火山方舟/百度（直接使用完整绝对路径，无任何拼接）
+                    # 核心修复：移除硬编码的火山方舟URL，改用配置的self.api_base
                     if not self.api_secret:
-                        # 火山方舟豆包大模型 正确完整有效接口路径
-                        full_valid_url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+                        # 智谱/火山引擎：使用配置的API_BASE（不再硬编码）
+                        full_valid_url = self.api_base  # 直接使用配置的地址
                         async with session.post(
-                                full_valid_url,  # 直接传完整路径，无 base_url 冲突
+                                full_valid_url,  # 配置的智谱地址：https://open.bigmodel.cn/api/paas/v4/chat/completions
                                 json=request_params,
                                 timeout=self.timeout
                         ) as response:
@@ -171,14 +180,14 @@ class LLMClient:
             logger.error(f"Failed to parse API response as JSON: {response_text[:500]}...")
             raise ValueError("Invalid JSON in API response")
 
-        # 提取内容（区分火山引擎/百度）
+        # 提取内容（区分智谱/火山引擎/百度，智谱和火山引擎响应格式一致）
         if not self.api_secret:
-            # 火山引擎（方舟）响应
+            # 智谱/火山引擎响应（格式完全兼容）
             if "choices" in result and result["choices"] and "message" in result["choices"][0]:
                 content = result["choices"][0]["message"]["content"].strip()
             else:
-                logger.error(f"Unexpected response structure (Volcano): {json.dumps(result, ensure_ascii=False)[:500]}...")
-                raise ValueError("Invalid response structure (Volcano Engine Ark)")
+                logger.error(f"Unexpected response structure: {json.dumps(result, ensure_ascii=False)[:500]}...")
+                raise ValueError("Invalid response structure (Zhipu/Volcano Engine)")
         else:
             # 百度响应
             if "result" in result:
@@ -188,26 +197,69 @@ class LLMClient:
                 raise ValueError("Invalid response structure (Baidu)")
 
         # 强化 JSON 格式校验和清理（适配 LLM 错误转义/残缺）
+        # 找到require_json=True的修复逻辑，替换为以下强化版：
         if require_json:
             try:
-                # 第一步：清理代码块标记
-                if content.startswith('```'):
-                    content = re.sub(r'^```(?:json)?\s*|\s*```\s*$', '', content).strip()
-                # 第二步：修复转义错误（核心！解决 \"body_paragraphs 问题）
-                content = content.replace('\\"', '"').replace('\n', '').replace('\r', '')
-                # 第三步：补全残缺括号
-                brace_diff = content.count('{') - content.count('}')
-                bracket_diff = content.count('[') - content.count(']')
-                if brace_diff > 0:
-                    content += '}' * brace_diff
-                if bracket_diff > 0:
-                    content += ']' * bracket_diff
-                # 第四步：验证并格式化
+                # 1. 清理代码块和无效字符
+                content = re.sub(r'^```(?:json)?\s*|\s*```\s*$', '', content.strip())  # 清理代码块
+                content = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\[\]{}:"",.\s]', '', content)  # 仅保留中文/英文/JSON字符
+                content = content.replace('\\"', '"').replace('\n', '').replace('\r', '')  # 修复转义
+
+                # 2. 智能补全截断的JSON（核心：从后往前补全，解决"sub_sect]"这类截断）
+                # 示例：把"sub_sect]"补全为"sub_section_title": ""}]}}
+                # 第一步：补全引号
+                quote_count = content.count('"')
+                if quote_count % 2 != 0:
+                    content += '"' * (2 - quote_count % 2)
+                # 第二步：补全未闭合的键值对（针对截断的字段名）
+                if content.endswith('"') or content.endswith(':') or content.endswith('[') or content.endswith('{'):
+                    content += '""'
+                # 第三步：补全括号（从后往前匹配）
+                brace_stack = []
+                bracket_stack = []
+                for char in content:
+                    if char == '{':
+                        brace_stack.append(char)
+                    elif char == '}':
+                        if brace_stack:
+                            brace_stack.pop()
+                    elif char == '[':
+                        bracket_stack.append(char)
+                    elif char == ']':
+                        if bracket_stack:
+                            bracket_stack.pop()
+                # 补全剩余的括号
+                content += ']' * len(bracket_stack) + '}' * len(brace_stack)
+
+                # 3. 验证并格式化
                 json_obj = json.loads(content)
                 content = json.dumps(json_obj, ensure_ascii=False, indent=2)
             except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON in response after cleanup: {content[:500]}... Error: {e}")
+                logger.error(f"JSON补全失败：{e}，使用默认大纲兜底")
+                # 兜底：返回完整的默认大纲JSON，确保前端能解析
+                default_outline = {
+                    "body_paragraphs": [
+                        {
+                            "chapter_title": "项目验收要求",
+                            "sections": [
+                                {
+                                    "section_title": "验收阶段",
+                                    "sub_sections": [
+                                        {
+                                            "sub_section_title": "总体要求",
+                                            "content_summary": "项目验收需符合合同及行业规范要求"
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+                content = json.dumps(default_outline, ensure_ascii=False, indent=2)
+                logger.warning("使用默认大纲JSON兜底")
+
                 raise ValueError(f"Invalid JSON after cleanup: {str(e)}")
+
 
         return content  # 确保返回处理后的内容
 

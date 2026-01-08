@@ -14,9 +14,9 @@ class Config:
     LOG_DIR = BASE_DIR / "logs"  # bidding/logs
     
     # LLM 配置
-    LLM_API_KEY = "92a8517f902a4489bbac76c77f5c4ead.RcnhkzoV6ykoOgfU"
-    LLM_API_BASE = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-    LLM_MODEL = "glm-4-free"  # 火山引擎有效模型 ID（固定写法，无需修改）
+    LLM_API_KEY = "sk-455203528d8243b9a96c9a5666cd5fd1"
+    LLM_API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    LLM_MODEL = "qwen-turbo"  # 火山引擎有效模型 ID（固定写法，无需修改）
     LLM_TIMEOUT = 300  # 超时时间足够
     
     MAX_RETRIES = 3
