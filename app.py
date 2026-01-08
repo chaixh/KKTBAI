@@ -1,13 +1,14 @@
 from quart import Quart, jsonify, request, render_template
 from quart_cors import cors
-from bidding_workflow import BiddingWorkflow
 import logging
 from config import Config
 import json
 from datetime import datetime
 import os
 import pathlib
-
+from bidding_workflow import app as bidding_app, BiddingWorkflow
+from quart import Quart
+from bidding_workflow import BiddingWorkflow, prompt_bp  # 导入提示词蓝图
 # 初始化配置
 app = Quart(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB 最大请求限制
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 # 确保输出目录存在
 os.makedirs(Config.OUTLINE_DIR if hasattr(Config, 'OUTLINE_DIR') else 'outputs/outline', exist_ok=True)
 os.makedirs('inputs', exist_ok=True)
+
+app.register_blueprint(prompt_bp)
 
 # 首页路由
 @app.route('/')

@@ -1,9 +1,12 @@
 from pathlib import Path
 import logging
+import pathlib
 
 class Config:
     BASE_DIR = Path(__file__).parent  # 修改为 bidding 目录
-    
+
+    TEMPLATE_FOLDER = BASE_DIR / "templates"
+    STATIC_FOLDER = BASE_DIR / "static"
     # 输入输出路径配置
     INPUT_DIR = BASE_DIR / "inputs"  # bidding/inputs
     OUTPUT_DIR = BASE_DIR / "outputs"  # bidding/outputs
@@ -11,9 +14,9 @@ class Config:
     LOG_DIR = BASE_DIR / "logs"  # bidding/logs
     
     # LLM 配置
-    LLM_API_KEY = "d004e9b7-19e0-49e8-99ef-b89dfdc211ad"
-    LLM_API_BASE = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
-    LLM_MODEL = "doubao-seed-1-6-251015"  # 火山引擎有效模型 ID（固定写法，无需修改）
+    LLM_API_KEY = "92a8517f902a4489bbac76c77f5c4ead.RcnhkzoV6ykoOgfU"
+    LLM_API_BASE = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    LLM_MODEL = "glm-4-free"  # 火山引擎有效模型 ID（固定写法，无需修改）
     LLM_TIMEOUT = 300  # 超时时间足够
     
     MAX_RETRIES = 3
@@ -35,6 +38,10 @@ class Config:
         'http': "http://127.0.0.1:10808",
         'https': "http://127.0.0.1:10808"  # HTTPS 也使用 HTTP 代理
     }
+
+
+
+
 
 # 修改日志级别为 DEBUG
 logging.basicConfig(

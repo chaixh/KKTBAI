@@ -21,7 +21,13 @@
             white-space: pre-wrap; /* 保留换行和空格 */
             word-break: break-all; /* 自动换行，防止内容溢出 */
             overflow-y: auto; /* 内容超出时显示滚动条 */
+            line-height: 1.6; /* 优化行高，提升可读性 */
         }
+        /* 新增：美化Markdown渲染后的样式 */
+        #outlineResult h1 { font-size: 20px; margin: 15px 0 10px; color: #2c3e50; }
+        #outlineResult h2 { font-size: 18px; margin: 12px 0 8px; color: #34495e; padding-left: 10px; border-left: 3px solid #007bff; }
+        #outlineResult h3 { font-size: 16px; margin: 10px 0 6px; color: #4a6583; padding-left: 20px; }
+        #outlineResult p { margin: 6px 0; color: #666; padding-left: 30px; }
     </style>
     <!-- 引入marked.js：用于格式化Markdown内容，让大纲层级更清晰（CDN方式，无需本地下载） -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -44,6 +50,47 @@
     <script>
         // 获取生成按钮元素
         const generateBtn = document.getElementById('generateBtn');
+
+        // 核心新增：将JSON格式的大纲转为美观的Markdown字符串
+        function convertOutlineToMarkdown(outlineObj) {
+            // 校验输入是否为合法对象
+            if (!outlineObj || typeof outlineObj !== 'object' || !outlineObj.body_paragraphs) {
+                return "⚠️ 大纲格式异常，无法转换为Markdown\n" + JSON.stringify(outlineObj, null, 2);
+            }
+
+            let mdContent = "";
+            // 遍历章节
+            outlineObj.body_paragraphs.forEach((chapter, chapterIdx) => {
+                // 章节标题（一级标题）
+                mdContent += `# ${chapter.chapter_title || `第${chapterIdx+1}章 未命名章节`}\n\n`;
+
+                // 遍历小节
+                if (chapter.sections && Array.isArray(chapter.sections)) {
+                    chapter.sections.forEach((section, sectionIdx) => {
+                        // 小节标题（二级标题）
+                        mdContent += `## ${section.section_title || `1.${sectionIdx+1} 未命名小节`}\n\n`;
+
+                        // 遍历子小节
+                        if (section.sub_sections && Array.isArray(section.sub_sections)) {
+                            section.sub_sections.forEach((subSection, subIdx) => {
+                                // 子小节标题（三级标题）
+                                mdContent += `### ${subSection.sub_section_title || `1.${sectionIdx+1}.${subIdx+1} 未命名子小节`}\n\n`;
+                                // 子小节内容摘要
+                                mdContent += `${subSection.content_summary || "无内容摘要"}\n\n`;
+                            });
+                        } else {
+                            mdContent += "⚠️ 该小节无子章节\n\n";
+                        }
+                    });
+                } else {
+                    mdContent += "⚠️ 该章节无小节\n\n";
+                }
+                // 章节之间添加分隔线
+                mdContent += "---\n\n";
+            });
+
+            return mdContent.trim(); // 去除首尾空白
+        }
 
         async function generateOutline() {
             const outlineResult = document.getElementById('outlineResult');
@@ -73,45 +120,54 @@
                     throw new Error(`后端返回非JSON格式：${rawResponse}，解析失败：${jsonError.message}`);
                 }
 
-                // 核心修改：1. 优先获取后端返回的md_content（本地文件真实内容），兼容多种格式
+                // 核心重构：清晰的状态判断和内容处理逻辑
                 let isSuccess = false;
                 let errorMsg = "后端未返回错误信息";
-                let outlineContent = "";
+                let finalMarkdown = "";
 
-                // 适配后端最新返回格式（success/msg/data，包含md_content）
-                if (result.hasOwnProperty('success')) {
-                    isSuccess = result.success;
-                    errorMsg = result.msg || "后端未返回错误信息";
-                    // 优先获取Markdown格式内容，其次是旧的outline_content
-                    outlineContent = result.data?.md_content || result.data?.outline_content || "";
-                }
-                // 兼容后端旧格式（status/message）
-                else if (result.hasOwnProperty('status')) {
-                    isSuccess = result.status === "success";
-                    errorMsg = result.message || "后端未返回错误信息";
-                    // 兼容旧格式的大纲内容
-                    outlineContent = result.outline || result.data?.outline_content || "";
-                }
-
-                // 正常逻辑处理
-                if (isSuccess) {
-                    if (outlineContent) {
-                        // 核心修改：2. 用marked.js格式化Markdown内容，渲染为美观的层级结构
-                        // 若需纯文本显示，可替换为 outlineResult.innerText = outlineContent;
-                        outlineResult.innerHTML = marked.parse(outlineContent);
-                    } else {
-                        outlineResult.innerText = "大纲生成成功，但无返回内容（请检查输入内容或模型配置）";
+                // 适配后端返回格式（优先最新格式，兼容旧格式）
+                if (result.status === "success") {
+                    isSuccess = true;
+                    // 情况1：后端返回了outline对象（核心修复点）
+                    if (result.outline && typeof result.outline === 'object') {
+                        finalMarkdown = convertOutlineToMarkdown(result.outline);
                     }
-                    alert('大纲生成成功！');
+                    // 情况2：后端直接返回了markdown字符串
+                    else if (result.outline_md && typeof result.outline_md === 'string') {
+                        finalMarkdown = result.outline_md;
+                    }
+                    // 情况3：兼容旧的content字段
+                    else if (result.data?.md_content || result.data?.outline_content) {
+                        finalMarkdown = result.data.md_content || result.data.outline_content;
+                    }
+                    // 兜底：转为JSON字符串
+                    else {
+                        finalMarkdown = JSON.stringify(result.outline || result.data || "", null, 2);
+                    }
                 } else {
-                    outlineResult.innerText = "大纲生成失败：" + errorMsg;
-                    alert('大纲生成失败：' + errorMsg);
+                    errorMsg = result.message || "大纲生成失败，后端未返回具体原因";
+                }
+
+                // 渲染结果到页面
+                if (isSuccess) {
+                    if (finalMarkdown) {
+                        // 核心修复：确保传入marked的是字符串（最终兜底校验）
+                        const renderContent = typeof finalMarkdown === 'string' ? finalMarkdown : JSON.stringify(finalMarkdown, null, 2);
+                        outlineResult.innerHTML = marked.parse(renderContent);
+                        console.log('大纲渲染成功，内容长度：', renderContent.length);
+                    } else {
+                        outlineResult.innerText = "✅ 大纲生成成功，但无有效内容（请检查输入的技术要求/评分标准是否为空）";
+                    }
+                    alert('✅ 大纲生成成功！可直接编辑或点击「保存大纲」');
+                } else {
+                    outlineResult.innerText = "❌ 大纲生成失败：" + errorMsg;
+                    alert('❌ 大纲生成失败：' + errorMsg);
                 }
             } catch (error) {
                 console.error('生成大纲失败（详细错误）：', error);
                 const errorMsg = error.message || "网络异常或服务未响应";
-                outlineResult.innerText = "大纲生成失败：" + errorMsg;
-                alert('生成大纲失败：' + errorMsg);
+                outlineResult.innerText = "❌ 大纲生成失败：" + errorMsg;
+                alert('❌ 生成大纲失败：' + errorMsg);
             } finally {
                 // 无论成功失败，都恢复按钮状态
                 generateBtn.disabled = false;
@@ -120,7 +176,15 @@
         }
 
         function saveOutline() {
-            alert('大纲保存成功，请切换到「终稿生成」页面！');
+            const outlineResult = document.getElementById('outlineResult');
+            if (outlineResult.innerText.includes("生成失败") || outlineResult.innerText.includes("请稍候")) {
+                alert('❌ 暂无有效大纲可保存，请先成功生成大纲！');
+                return;
+            }
+            // 模拟保存逻辑（实际可对接后端保存接口）
+            alert('✅ 大纲已保存到本地！请切换到「终稿生成」页面继续操作。');
+            // 可选：自动跳转到终稿页面
+            // window.location.href = '/document';
         }
     </script>
 

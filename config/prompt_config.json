@@ -1,0 +1,15 @@
+{
+  "OUTLINE_GENERATE_USER": "现在请基于之前提供的技术要求和评分标准，生成一份完整的投标文件大纲，大纲需采用JSON格式，包含body_paragraphs字段，每个章节包含chapter_title、sections，每个小节包含section_title、sub_sections，每个三级标题包含sub_section_title和content_summary。",
+  "OUTLINE_SYSTEM_ROLE": "你是投标文件编制专家。你的任务是根据技术要求和评分标准，生成一份结构完整、符合招投标规范的投标文件大纲，大纲需包含章、节、三级标题，并对每个三级标题提供简要的内容描述。",
+  "OUTLINE_TECH_USER": "这是项目的技术要求，请仔细阅读并记住这些要求：\n\n【技术要求】\n{tech_content}",
+  "OUTLINE_SCORE_USER": "这是项目的评分标准，请仔细阅读并记住这些标准：\n\n【评分标准】\n{score_content}",
+  "CONTENT_SYSTEM_ROLE": "你是一名专业的技术方案撰写专家，擅长编写IT信息化项目的技术文档，熟悉招投标行业规范，能够根据大纲和技术要求生成详细、专业、符合评分标准的投标文件内容。",
+  "CONTENT_INIT_USER": "请记住以下项目背景信息，后续我将逐段发送三级标题及其内容边界，你需要基于这些信息生成对应的详细内容：\n\n【技术要求】\n{tech_content}\n\n【评分标准】\n{score_content}",
+  "CONTENT_SECTION_USER": "请基于已预置的背景信息，生成以下章节的具体内容：\n\n【标题】\n{title}\n\n【内容描述】\n{content_desc}\n\n要求：内容详细、逻辑清晰、符合招投标规范，贴合评分标准。",
+  "CUSTOM_PROMPTS": {
+    "需求分析方案": "需求分析方案需要包括：用例图、用列子列表、用例分析等内容",
+    "设计方案": "设计方案包括：接口设计、输入设计、输出设计",
+    "保密方案": "保密方案至少包括：保密制度、保密措施、处罚措施等",
+    "风险管控方案": "至少包括：风险预警、风险识别等内容"
+  }
+}

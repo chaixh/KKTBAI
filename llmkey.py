@@ -28,11 +28,12 @@ class LLMClient:
         self.temperature = temperature or Config.TEMPERATURE
         self.max_tokens = max_tokens or Config.MAX_TOKENS
         self.timeout = timeout or Config.TIMEOUT
-        self.session = None
+        # 核心修复：移除 self.session 复用，改为每次调用创建新会话
         self.messages = []
         # 百度专属：获取 Access Token
         self.access_token = self._get_baidu_access_token() if self.api_secret else None
         logger.info("LLM client initialized successfully")
+        print(f"加载的API Key：{self.api_key[:10]}...")
 
     # 百度 Access Token 获取方法（保留原有功能）
     def _get_baidu_access_token(self):
@@ -44,128 +45,131 @@ class LLMClient:
         except Exception as e:
             raise ValueError(f"获取百度 Access Token 失败：{str(e)}")
 
-    # 异步上下文管理器入口（保留原有功能）
+    # 异步上下文管理器入口（适配新的会话管理）
     async def __aenter__(self):
-        await self._ensure_session()
         return self
 
-    # 异步上下文管理器出口（保留原有功能）
+    # 异步上下文管理器出口（确保会话关闭）
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.close()
+        # 无需手动关闭，因为每次调用都用 async with 自动管理
+        pass
 
-    # 确保 session 存在且有效（彻底删除 base_url 配置，解决路径冲突）
-    async def _ensure_session(self):
-        """确保 session 存在且有效（无 base_url 配置，避免路径拼接冲突）"""
-        if self.session is None or self.session.closed:
-            # 配置 SSL 上下文
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
+    # 核心修复：删除 _ensure_session 方法，改为每次调用创建新会话
+    def _get_session_kwargs(self):
+        """构建会话参数（抽离为独立方法，便于复用）"""
+        # 配置 SSL 上下文
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
 
-            # 配置连接超时
-            timeout = aiohttp.ClientTimeout(
-                total=self.timeout,
-                connect=10,
-                sock_read=20
-            )
+        # 配置连接超时
+        timeout = aiohttp.ClientTimeout(
+            total=self.timeout,
+            connect=10,
+            sock_read=20
+        )
 
-            # 配置连接器
-            connector_kwargs = {
-                'ssl': ssl_context,
-                'limit': 15,  # 调整并发连接数
-                'force_close': True,
-                'enable_cleanup_closed': True
-            }
+        # 配置连接器
+        connector_kwargs = {
+            'ssl': ssl_context,
+            'limit': 15,  # 调整并发连接数
+            'force_close': True,
+            'enable_cleanup_closed': True
+        }
 
-            connector = aiohttp.TCPConnector(**connector_kwargs)
+        connector = aiohttp.TCPConnector(**connector_kwargs)
 
-            # 创建会话参数（彻底移除 base_url 配置）
-            session_kwargs = {
-                'headers': {
-                    "Content-Type": "application/json"
-                },
-                'timeout': timeout,
-                'connector': connector
-            }
+        # 创建会话参数（彻底移除 base_url 配置）
+        session_kwargs = {
+            'headers': {
+                "Content-Type": "application/json"
+            },
+            'timeout': timeout,
+            'connector': connector
+        }
 
-            # 添加鉴权头（区分火山引擎/百度）
-            if not self.api_secret:
-                session_kwargs['headers']["Authorization"] = f"Bearer {self.api_key}"
-            # 如果使用代理，添加代理配置
-            if Config.USE_PROXY:
-                session_kwargs['proxy'] = Config.PROXY_URLS['https']
-                logger.info(f"Using proxy: {Config.PROXY_URLS}")
+        # 添加鉴权头（区分火山引擎/百度）
+        if not self.api_secret:
+            session_kwargs['headers']["Authorization"] = f"glm-key {self.api_key}"
+        # 如果使用代理，添加代理配置
+        if Config.USE_PROXY:
+            session_kwargs['proxy'] = Config.PROXY_URLS['https']
+            logger.info(f"Using proxy: {Config.PROXY_URLS}")
 
-            self.session = aiohttp.ClientSession(**session_kwargs)
-            logger.info("Created new session (without base_url, no path splicing)")
+        return session_kwargs
 
-    # 核心方法：_call_llm_async（使用完整绝对路径，彻底解决 404 和 断言错误）
+    # 核心方法：_call_llm_async（使用 async with 管理会话，解决资源泄漏）
     async def _call_llm_async(self, messages, require_json=False, require_outline=False):
-        await self._ensure_session()
         retry_count = 0
+        session_kwargs = self._get_session_kwargs()
 
         while retry_count <= Config.MAX_RETRIES:
-            try:
-                request_params = {
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": self.temperature,
-                    "max_tokens": self.max_tokens,
-                    "top_p": Config.TOP_P,
-                    "stream": False
-                }
+            # 核心修复：使用 async with 自动创建/关闭会话
+            async with aiohttp.ClientSession(**session_kwargs) as session:
+                try:
+                    request_params = {
+                        "model": self.model,
+                        "messages": messages,
+                        "temperature": self.temperature,
+                        "max_tokens": self.max_tokens,
+                        "top_p": Config.TOP_P,
+                        "stream": False
+                    }
 
-                logger.debug(f"Sending request with params: {json.dumps(request_params, ensure_ascii=False)}")
+                    logger.debug(f"Sending request with params: {json.dumps(request_params, ensure_ascii=False)}")
 
-                # 区分火山方舟/百度（直接使用完整绝对路径，无任何拼接）
-                if not self.api_secret:
-                    # 火山方舟豆包大模型 正确完整有效接口路径（解决 404 问题）
-                    full_valid_url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
-                    async with self.session.post(
-                            full_valid_url,  # 直接传完整路径，无 base_url 冲突
-                            json=request_params,
-                            timeout=self.timeout
-                    ) as response:
-                        content = await self._handle_response(response, require_json)
-                        return content
-                else:
-                    # 百度：直接使用完整路径 + Access Token
-                    full_valid_url = f"{self.api_base}?access_token={self.access_token}"
-                    async with self.session.post(
-                            full_valid_url,
-                            json=request_params,
-                            timeout=self.timeout
-                    ) as response:
-                        content = await self._handle_response(response, require_json)
-                        return content
+                    # 区分火山方舟/百度（直接使用完整绝对路径，无任何拼接）
+                    if not self.api_secret:
+                        # 火山方舟豆包大模型 正确完整有效接口路径
+                        full_valid_url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+                        async with session.post(
+                                full_valid_url,  # 直接传完整路径，无 base_url 冲突
+                                json=request_params,
+                                timeout=self.timeout
+                        ) as response:
+                            content = await self._handle_response(response, require_json)
+                            return content
+                    else:
+                        # 百度：直接使用完整路径 + Access Token
+                        full_valid_url = f"{self.api_base}?access_token={self.access_token}"
+                        async with session.post(
+                                full_valid_url,
+                                json=request_params,
+                                timeout=self.timeout
+                        ) as response:
+                            content = await self._handle_response(response, require_json)
+                            return content
 
-            # 以下重试逻辑保持不变...
-            except asyncio.TimeoutError:
-                retry_count += 1
-                if retry_count <= Config.MAX_RETRIES:
-                    wait_time = Config.RETRY_DELAY * (Config.RETRY_BACKOFF ** (retry_count - 1))
-                    logger.warning(
-                        f"Request timeout. Retrying in {wait_time} seconds... (Attempt {retry_count}/{Config.MAX_RETRIES})")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error("Request failed after maximum retries due to timeout")
-                    raise ValueError("Request timeout after max retries")
-            except Exception as e:
-                logger.error(f"Request failed: {str(e)}")
-                raise e
+                except asyncio.TimeoutError:
+                    retry_count += 1
+                    if retry_count <= Config.MAX_RETRIES:
+                        wait_time = Config.RETRY_DELAY * (Config.RETRY_BACKOFF ** (retry_count - 1))
+                        logger.warning(
+                            f"Request timeout. Retrying in {wait_time} seconds... (Attempt {retry_count}/{Config.MAX_RETRIES})")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        logger.error("Request failed after maximum retries due to timeout")
+                        raise ValueError("Request timeout after max retries")
+                except Exception as e:
+                    logger.error(f"Request failed: {str(e)}")
+                    raise e
 
-    # 响应处理辅助方法（简化无用参数 + 确保返回内容）
+    # 响应处理辅助方法（强化 JSON 清理，适配 LLM 异常返回）
     async def _handle_response(self, response, require_json):
         # 记录原始响应
         response_text = await response.text()
-        logger.debug(f"Raw API response: {response_text}")
+        logger.debug(f"Raw API response: {response_text[:500]}...")  # 截断长日志
 
         # 状态码校验
         if response.status != 200:
-            logger.error(f"API returned status {response.status}: {response_text}")
+            logger.error(f"API returned status {response.status}: {response_text[:500]}...")
             raise ValueError(f"API returned status {response.status}")
 
         # 解析响应
-        result = json.loads(response_text)
+        try:
+            result = json.loads(response_text)
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse API response as JSON: {response_text[:500]}...")
+            raise ValueError("Invalid JSON in API response")
 
         # 提取内容（区分火山引擎/百度）
         if not self.api_secret:
@@ -173,26 +177,37 @@ class LLMClient:
             if "choices" in result and result["choices"] and "message" in result["choices"][0]:
                 content = result["choices"][0]["message"]["content"].strip()
             else:
-                logger.error(f"Unexpected response structure: {result}")
+                logger.error(f"Unexpected response structure (Volcano): {json.dumps(result, ensure_ascii=False)[:500]}...")
                 raise ValueError("Invalid response structure (Volcano Engine Ark)")
         else:
             # 百度响应
             if "result" in result:
                 content = result["result"].strip()
             else:
-                logger.error(f"Unexpected response structure: {result}")
+                logger.error(f"Unexpected response structure (Baidu): {json.dumps(result, ensure_ascii=False)[:500]}...")
                 raise ValueError("Invalid response structure (Baidu)")
 
-        # JSON 格式校验
+        # 强化 JSON 格式校验和清理（适配 LLM 错误转义/残缺）
         if require_json:
             try:
+                # 第一步：清理代码块标记
                 if content.startswith('```'):
-                    content = re.sub(r'^```(?:json)?\s*|\s*```\s*$', '', content)
+                    content = re.sub(r'^```(?:json)?\s*|\s*```\s*$', '', content).strip()
+                # 第二步：修复转义错误（核心！解决 \"body_paragraphs 问题）
+                content = content.replace('\\"', '"').replace('\n', '').replace('\r', '')
+                # 第三步：补全残缺括号
+                brace_diff = content.count('{') - content.count('}')
+                bracket_diff = content.count('[') - content.count(']')
+                if brace_diff > 0:
+                    content += '}' * brace_diff
+                if bracket_diff > 0:
+                    content += ']' * bracket_diff
+                # 第四步：验证并格式化
                 json_obj = json.loads(content)
                 content = json.dumps(json_obj, ensure_ascii=False, indent=2)
             except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON in response: {content}")
-                raise ValueError(f"Invalid JSON: {str(e)}")
+                logger.error(f"Invalid JSON in response after cleanup: {content[:500]}... Error: {e}")
+                raise ValueError(f"Invalid JSON after cleanup: {str(e)}")
 
         return content  # 确保返回处理后的内容
 
@@ -250,12 +265,10 @@ class LLMClient:
             logger.error(f"Error initializing content generation: {e}")
             return False
 
-    # 关闭会话（保留原有功能）
+    # 关闭会话（适配新的会话管理，空实现）
     async def close(self):
-        """关闭会话"""
-        if self.session and not self.session.closed:
-            await self.session.close()
-            self.session = None
+        """关闭会话（现在由 async with 自动管理，此方法保留以兼容原有代码）"""
+        pass
 
     # 开始新对话（保留原有功能）
     def start_new_chat(self, system_role: str):

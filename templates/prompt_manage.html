@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>提示词管理</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>提示词管理</h1>
+
+        <!-- 系统提示词区域 -->
+        <div class="prompt-section">
+            <h2>系统默认提示词（可修改/重置）</h2>
+            <div id="system-prompts"></div>
+        </div>
+
+        <!-- 自定义提示词区域 -->
+        <div class="prompt-section">
+            <h2>自定义提示词（针对特定招标内容）</h2>
+            <div class="add-custom">
+                <input type="text" id="custom-key" placeholder="提示词名称">
+                <button onclick="addCustomPrompt()">添加</button>
+            </div>
+            <div id="custom-prompts"></div>
+        </div>
+    </div>
+
+    <script>
+        // 加载所有提示词
+        async function loadPrompts() {
+            const res = await fetch('/api/prompts');
+            const data = await res.json();
+            if (data.code === 200) {
+                renderSystemPrompts(data.data.system);
+                renderCustomPrompts(data.data.custom);
+            }
+        }
+
+        // 渲染系统提示词
+        function renderSystemPrompts(prompts) {
+            const container = document.getElementById('system-prompts');
+            container.innerHTML = '';
+            for (const [key, content] of Object.entries(prompts)) {
+                container.innerHTML += `
+                    <div class="prompt-card">
+                        <div class="prompt-key">${key}</div>
+                        <textarea class="prompt-content" data-key="${key}">${content}</textarea>
+                        <div class="prompt-actions">
+                            <button onclick="savePrompt('${key}', false)">保存</button>
+                            <button onclick="resetPrompt('${key}')">重置默认</button>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        // 渲染自定义提示词
+        function renderCustomPrompts(prompts) {
+            const container = document.getElementById('custom-prompts');
+            container.innerHTML = '';
+            for (const [key, content] of Object.entries(prompts)) {
+                container.innerHTML += `
+                    <div class="prompt-card">
+                        <div class="prompt-key">${key}</div>
+                        <textarea class="prompt-content" data-key="${key}">${content}</textarea>
+                        <div class="prompt-actions">
+                            <button onclick="savePrompt('${key}', true)">保存</button>
+                            <button onclick="deletePrompt('${key}')">删除</button>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        // 保存提示词
+        async function savePrompt(key, isCustom) {
+            const content = document.querySelector(`textarea[data-key="${key}"]`).value;
+            const res = await fetch('/api/prompts', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({key, content, is_custom: isCustom})
+            });
+            const data = await res.json();
+            alert(data.msg);
+        }
+
+        // 重置提示词
+        async function resetPrompt(key) {
+            const res = await fetch(`/api/prompts/reset/${key}`, {method: 'POST'});
+            const data = await res.json();
+            alert(data.msg);
+            loadPrompts(); // 重新加载
+        }
+
+        // 删除自定义提示词
+        async function deletePrompt(key) {
+            if (confirm(`确定删除${key}？`)) {
+                const res = await fetch(`/api/prompts/${key}`, {method: 'DELETE'});
+                const data = await res.json();
+                alert(data.msg);
+                loadPrompts(); // 重新加载
+            }
+        }
+
+        // 添加自定义提示词
+        function addCustomPrompt() {
+            const key = document.getElementById('custom-key').value.trim();
+            if (!key) {
+                alert('请输入提示词名称');
+                return;
+            }
+            // 新增一个空的自定义提示词
+            const container = document.getElementById('custom-prompts');
+            container.innerHTML += `
+                <div class="prompt-card">
+                    <div class="prompt-key">${key}</div>
+                    <textarea class="prompt-content" data-key="${key}" placeholder="请输入提示词内容..."></textarea>
+                    <div class="prompt-actions">
+                        <button onclick="savePrompt('${key}', true)">保存</button>
+                        <button onclick="deletePrompt('${key}')">删除</button>
+                    </div>
+                </div>
+            `;
+            document.getElementById('custom-key').value = '';
+        }
+
+        // 页面加载时初始化
+        window.onload = loadPrompts;
+    </script>
+</body>
+</html>
